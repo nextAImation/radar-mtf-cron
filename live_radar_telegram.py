@@ -24,7 +24,7 @@ import pandas as pd
 import numpy as np
 
 from radar_toolkit import (
-    fetch_klines_yf,        # ← NEW: Yahoo Finance fetcher
+    fetch_klines_yf,        # ← Yahoo Finance fetcher
     compute_indicators,
     weekly_regime_from_1d,
     daily_setup_ok,
@@ -86,7 +86,7 @@ def momentum_pct(df_1d: pd.DataFrame, window: int) -> float | None:
         return None
     try:
         c_now = float(df_1d["close"].iloc[-1])
-        c_past = float(df_1d["close"].iloc[-window-1])  # -1 is last closed bar
+        c_past = float(df_1d["close"].iloc[-(window+1)])  # last closed bar vs N bars ago
         if c_past == 0:
             return None
         return (c_now / c_past - 1.0) * 100.0
@@ -96,7 +96,7 @@ def momentum_pct(df_1d: pd.DataFrame, window: int) -> float | None:
 # =================== 4H ET fast flags ===================
 def prep_4h_flags(df_4h_raw: pd.DataFrame) -> pd.DataFrame:
     if df_4h_raw is None or len(df_4h_raw) == 0:
-        return pd.DataFrame()
+        return pd.DataFrame(index=pd.DatetimeIndex([], tz="UTC"))
     df4 = compute_indicators(df_4h_raw.copy())
     rng = (df4["high"] - df4["low"])
     cond = (
@@ -142,6 +142,8 @@ def evaluate_symbol(symbol: str) -> dict:
     try:
         # 1D
         df_1d = load_df(symbol, "1d", limit=LIMIT_1D)
+        if df_1d is None or df_1d.empty:
+            raise RuntimeError(f"Yahoo Finance returned no 1D data for {symbol}")
         df_1d_ind = compute_indicators(df_1d)
         close_1d = float(df_1d_ind["close"].iloc[-1])
         t1d = df_1d_ind.index[-1]
@@ -161,6 +163,8 @@ def evaluate_symbol(symbol: str) -> dict:
 
             time.sleep(REQ_SLEEP_SEC)
             df_4h = load_df(symbol, "4h", limit=LIMIT_4H)
+            if df_4h is None or df_4h.empty:
+                raise RuntimeError(f"Yahoo Finance returned no 4H data for {symbol}")
             flags_4h = prep_4h_flags(df_4h)
             f4 = fourh_ok_between(flags_4h, t0, t1)
 
