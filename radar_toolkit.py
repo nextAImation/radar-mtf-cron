@@ -65,11 +65,11 @@ def fetch_klines_yf(symbol: str, interval: str = "1d", limit: int = 800) -> pd.D
         data.index = data.index.tz_localize("UTC") if data.index.tz is None else data.index.tz_convert("UTC")
 
     out = pd.DataFrame({
-        "open": pd.to_numeric(data["Open"], errors="coerce"),
-        "high": pd.to_numeric(data["High"], errors="coerce"),
-        "low":  pd.to_numeric(data["Low"],  errors="coerce"),
-        "close":pd.to_numeric(data["Close"],errors="coerce"),
-        "vol":  pd.to_numeric(data["Volume"],errors="coerce"),
+        "open":  pd.to_numeric(data["Open"],   errors="coerce"),
+        "high":  pd.to_numeric(data["High"],   errors="coerce"),
+        "low":   pd.to_numeric(data["Low"],    errors="coerce"),
+        "close": pd.to_numeric(data["Close"],  errors="coerce"),
+        "vol":   pd.to_numeric(data["Volume"], errors="coerce"),
     }, index=data.index).dropna()
 
     if limit and len(out) > limit:
@@ -289,8 +289,8 @@ def compute_indicators(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Da
     out["vol_ma60"] = out["vol"].rolling(60, min_periods=20).mean()
     out["vol_ratio"] = (out["vol_ma20"] / (out["vol_ma60"] + 1e-9)).fillna(0.0)
 
-    # True range & z-scores
-    out["tr"] = out["high"] - out["low"]
+    # True range & z-scores  (بهبود: TR واقعی هم‌راستا با ATR)
+    out["tr"] = _true_range(out)
     out["vol_z60"] = safe_zscore(out["vol"], 60)
     out["tr_z60"] = safe_zscore(out["tr"], 60)
 
@@ -303,14 +303,20 @@ def compute_indicators(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Da
     # Stacked trend
     out["stacked"] = ((out["ema20"] > out["ema50"]) & (out["ema50"] > out["ema200"])).astype(bool)
 
-    # NearEMA adaptive
+    # NearEMA adaptive  (فیکس: تبدیل np.where به Series هم‌اندیس)
     dist_e20 = (out["close"] - out["ema20"]).abs()
     dist_e50 = (out["close"] - out["ema50"]).abs()
     min_dist = pd.concat([dist_e20, dist_e50], axis=1).min(axis=1)
+
     k_base = 0.5
     k_relaxed = 0.7
-    k = np.where((out["adx14"] >= 18) & (out["adx14"] < 25), k_relaxed, k_base)
-    out["near_ema"] = (min_dist <= (pd.to_numeric(out["atr14"], errors="coerce") * k)).astype(bool)
+    k_series = pd.Series(k_base, index=out.index, dtype="float64")
+    mask_relax = (out["adx14"] >= 18) & (out["adx14"] < 25)
+    k_series.loc[mask_relax] = k_relaxed
+
+    atr_s = pd.to_numeric(out["atr14"], errors="coerce")
+    threshold = atr_s * k_series
+    out["near_ema"] = (min_dist <= threshold).astype(bool)
 
     # Candle OK
     bar_range = (out["high"] - out["low"]).replace(0.0, np.nan)
