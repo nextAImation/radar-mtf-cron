@@ -63,6 +63,44 @@ BINANCE_BASES = [
     "https://www.binance.com",  # وب‌دامین که اغلب Mirror هم دارد
 ]
 # اگر خواستی دستی Override کنی:
+import os, time, random, requests
+
+BINANCE_BASES = [
+    "https://data-api.binance.vision",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+    "https://api4.binance.com",
+    "https://api-gcp.binance.com",
+    "https://api.binance.com",
+]
+
+REQ_SLEEP_SEC = float(os.environ.get("REQ_SLEEP_SEC", "0.3"))
+MAX_RETRIES = int(os.environ.get("BINANCE_MAX_RETRIES", "2"))
+
+def fetch_klines_binance(symbol: str, interval: str, limit: int = 800, timeout: int = 20):
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    bases = BINANCE_BASES[:]
+    random.shuffle(bases)
+    last_err = None
+    for base in bases:
+        url = f"{base}/api/v3/klines"
+        for _ in range(MAX_RETRIES):
+            try:
+                r = requests.get(url, params=params, timeout=timeout)
+                if r.status_code == 200:
+                    return r.json()
+                if r.status_code in (451, 403, 429, 418, 520, 525):
+                    last_err = f"{r.status_code} from {base}"
+                    time.sleep(REQ_SLEEP_SEC)
+                    continue
+                r.raise_for_status()
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e} ({base})"
+                time.sleep(REQ_SLEEP_SEC)
+                continue
+    raise RuntimeError(f"Failed to fetch klines for {symbol} {interval}. Last error: {last_err}")
+
 OVERRIDE_BASE = os.environ.get("BINANCE_API_BASE")
 
 REQ_SLEEP_SEC = float(os.environ.get("REQ_SLEEP_SEC", "0.3"))
@@ -522,4 +560,5 @@ def mtf_decision(df_1d: pd.DataFrame, df_4h: pd.DataFrame, min_score:int=65, req
         "signal": signal,
         "weekly": wk, "daily_ok": d, "fourh_trigger": h4
     }
+
 
