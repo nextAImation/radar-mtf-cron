@@ -1,69 +1,45 @@
-- name: Install deps
-  run: |
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-- name: Run live scanner
-  run: python live_radar_telegram.py
+name: Radar MTF Cron
 
+on:
+  workflow_dispatch:      # اجرای دستی برای تست
+  schedule:
+    - cron: "5 */4 * * *" # هر 4 ساعت در دقیقه 05 (UTC)
 
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,TRXUSDT,LINKUSDT,AVAXUSDT,MATICUSDT,DOTUSDT,ATOMUSDT,LTCUSDT,ARBUSDT"
+      LIMIT_1D: "900"
+      LIMIT_4H: "1800"
+      MIN_SCORE_D: "55"
+      REQUIRE_NO_GUARDS: "0"
+      MTF_ENABLED: "1"
+      REQ_SLEEP_SEC: "0.25"
+      TZ: "UTC"  # لاگ‌ها برحسب UTC
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+      - name: Run scanner
+        run: |
+          python live_radar_telegram.py
