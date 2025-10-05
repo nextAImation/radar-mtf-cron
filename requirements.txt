@@ -3,3 +3,6 @@ numpy>=1.26
 requests>=2.32
 python-dateutil>=2.9
 requests[socks]>=2.32
+yfinance>=0.2.43
+
+
