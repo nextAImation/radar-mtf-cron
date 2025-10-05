@@ -2,15 +2,16 @@
 """
 RADAR — Live Scanner to Telegram (MTF: Weekly + Daily + 4H)
 
-• Fetch: OHLCV 1D & 4H from Binance REST
+• Fetch: OHLCV 1D & 4H from Yahoo Finance (via yfinance)
 • Compute: weekly_regime, daily_setup_ok, 4H fast trigger
 • Send: ranked list (most attractive → least) to Telegram with concise reasons + key levels + momentum 7d/30d.
 
 ENV (optional):
-  SYMBOLS, MTF_ENABLED, MIN_SCORE_D, REQUIRE_NO_GUARDS, FOURH_INTERVAL
+  SYMBOLS, MTF_ENABLED, MIN_SCORE_D, REQUIRE_NO_GUARDS
+  LIMIT_1D, LIMIT_4H
   REQ_SLEEP_SEC (default 0.25)
-  HTTPS_PROXY (e.g. http://127.0.0.1:7890 or socks5h://127.0.0.1:1080)
   TELEGRAM_API_BASE (default https://api.telegram.org)
+  HTTPS_PROXY (proxy only for Telegram, optional)
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ import pandas as pd
 import numpy as np
 
 from radar_toolkit import (
+    fetch_klines_yf,        # ← NEW: Yahoo Finance fetcher
     compute_indicators,
     weekly_regime_from_1d,
     daily_setup_ok,
@@ -34,48 +36,37 @@ CHAT_ID   = "-1002925489017"
 print("DBG | BOT_TOKEN len:", len(BOT_TOKEN), " | CHAT_ID:", CHAT_ID)
 
 # =================== Config & Defaults ===================
-BINANCE_BASE = "https://api.binance.com"
 DFLT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,TRXUSDT,LINKUSDT,AVAXUSDT,MATICUSDT,DOTUSDT,ATOMUSDT,LTCUSDT,ARBUSDT"
 
 SYMBOLS = [s.strip() for s in os.getenv("SYMBOLS", DFLT_SYMBOLS).split(",") if s.strip()]
 MIN_SCORE_D = int(os.getenv("MIN_SCORE_D", "55"))
 REQUIRE_NO_GUARDS = bool(int(os.getenv("REQUIRE_NO_GUARDS", "0")))
 MTF_ENABLED = bool(int(os.getenv("MTF_ENABLED", "1")))
-FOURH_INTERVAL = os.getenv("FOURH_INTERVAL", "4h")  # fixed: 4h
+LIMIT_1D = int(os.getenv("LIMIT_1D", "900"))
+LIMIT_4H = int(os.getenv("LIMIT_4H", "1800"))
 REQ_SLEEP_SEC = float(os.getenv("REQ_SLEEP_SEC", "0.25"))
 TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
-HTTPS_PROXY = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")  # optional
+HTTPS_PROXY = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")  # optional, for Telegram only
 
 EMO = {"ENTRY": "🟢", "WATCH": "🟡", "NO_TRADE": "⚫️", "ERROR": "⚠️"}
 
-# =================== HTTP (proxy-aware) ===================
+# =================== HTTP (proxy-aware) for Telegram only ===================
 def _requests_session_with_proxy() -> requests.Session:
     sess = requests.Session()
     if HTTPS_PROXY:
         sess.proxies.update({"https": HTTPS_PROXY})
-        print("DBG | Using HTTPS proxy:", HTTPS_PROXY)
+        print("DBG | Using HTTPS proxy for Telegram:", HTTPS_PROXY)
     return sess
+
 HTTP = _requests_session_with_proxy()
 
-# =================== Binance fetchers ===================
-def binance_klines(symbol: str, interval: str, limit: int = 1000) -> pd.DataFrame:
-    url = f"{BINANCE_BASE}/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    r = HTTP.get(url, params=params, timeout=25)
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, list) or len(data) == 0:
-        raise ValueError(f"No klines for {symbol} {interval}")
-    cols = ["open_time","open","high","low","close","volume","close_time",
-            "qav","num_trades","taker_base","taker_quote","ignore"]
-    df = pd.DataFrame(data, columns=cols)
-    df["time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-    df = df.set_index("time").sort_index()
-    for c in ["open","high","low","close","volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df = df.rename(columns={"volume":"vol"})
-    df = df[["open","high","low","close","vol"]].dropna()
-    return df
+# =================== Data loader (Yahoo Finance) ===================
+def load_df(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    """
+    Wraps radar_toolkit.fetch_klines_yf to standardize fetching.
+    interval: '1d' or '4h' (4h is built from 1h via resample inside the helper)
+    """
+    return fetch_klines_yf(symbol, interval=interval, limit=limit)
 
 # =================== Key levels (1D) ===================
 def key_levels_1d(df_1d: pd.DataFrame, look1: int = 20, look2: int = 60) -> dict:
@@ -149,7 +140,8 @@ def evaluate_symbol(symbol: str) -> dict:
         "levels": None, "m7": None, "m30": None,
     }
     try:
-        df_1d = binance_klines(symbol, "1d", limit=800)
+        # 1D
+        df_1d = load_df(symbol, "1d", limit=LIMIT_1D)
         df_1d_ind = compute_indicators(df_1d)
         close_1d = float(df_1d_ind["close"].iloc[-1])
         t1d = df_1d_ind.index[-1]
@@ -163,11 +155,12 @@ def evaluate_symbol(symbol: str) -> dict:
             daily_ok = bool(dchk.get("ok", False))
             score = int(dchk.get("score", 0))
 
+            # 4H window aligned to the last 1D bar
             t0 = t1d
             t1 = t0 + pd.Timedelta(days=1)
 
             time.sleep(REQ_SLEEP_SEC)
-            df_4h = binance_klines(symbol, "4h", limit=1000)
+            df_4h = load_df(symbol, "4h", limit=LIMIT_4H)
             flags_4h = prep_4h_flags(df_4h)
             f4 = fourh_ok_between(flags_4h, t0, t1)
 
@@ -236,7 +229,7 @@ def fmt_pct(x: float | None) -> str:
     if x is None or not np.isfinite(x):
         return "—"
     sign = "+" if x >= 0 else ""
-    if abs(x) < 10: 
+    if abs(x) < 10:
         return f"{sign}{x:.2f}%"
     return f"{sign}{x:.1f}%"
 
