@@ -5,13 +5,6 @@ RADAR — Live Scanner to Telegram (MTF: Weekly + Daily + 4H)
 • Fetch: OHLCV 1D & 4H from Yahoo Finance (via yfinance)
 • Compute: weekly_regime, daily_setup_ok, 4H fast trigger
 • Send: ranked list (most attractive → least) to Telegram with concise reasons + key levels + momentum 7d/30d.
-
-ENV (optional):
-  SYMBOLS, MTF_ENABLED, MIN_SCORE_D, REQUIRE_NO_GUARDS
-  LIMIT_1D, LIMIT_4H
-  REQ_SLEEP_SEC (default 0.25)
-  TELEGRAM_API_BASE (default https://api.telegram.org)
-  HTTPS_PROXY (proxy only for Telegram, optional)
 """
 from __future__ import annotations
 
@@ -30,7 +23,7 @@ from radar_toolkit import (
     daily_setup_ok,
 )
 
-# =================== Telegram creds (HARD-CODED as requested) ===================
+# =================== Telegram creds ===================
 BOT_TOKEN = "7512369490:AAHiQqOzjLxh5zjcx3gmUT-hEj1196tIHfI"
 CHAT_ID   = "-1002925489017"
 print("DBG | BOT_TOKEN len:", len(BOT_TOKEN), " | CHAT_ID:", CHAT_ID)
@@ -62,10 +55,7 @@ HTTP = _requests_session_with_proxy()
 
 # =================== Data loader (Yahoo Finance) ===================
 def load_df(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    """
-    Wraps radar_toolkit.fetch_klines_yf to standardize fetching.
-    interval: '1d' or '4h' (4h is built from 1h via resample inside the helper)
-    """
+    """Wraps radar_toolkit.fetch_klines_yf to standardize fetching."""
     return fetch_klines_yf(symbol, interval=interval, limit=limit)
 
 # =================== Key levels (1D) ===================
@@ -86,7 +76,7 @@ def momentum_pct(df_1d: pd.DataFrame, window: int) -> float | None:
         return None
     try:
         c_now = float(df_1d["close"].iloc[-1])
-        c_past = float(df_1d["close"].iloc[-(window+1)])  # last closed bar vs N bars ago
+        c_past = float(df_1d["close"].iloc[-(window+1)])
         if c_past == 0:
             return None
         return (c_now / c_past - 1.0) * 100.0
@@ -94,18 +84,27 @@ def momentum_pct(df_1d: pd.DataFrame, window: int) -> float | None:
         return None
 
 # =================== 4H ET fast flags ===================
+def _series_or_zero(df: pd.DataFrame, col: str) -> pd.Series:
+    """Return a Series df[col] if exists else a 0-filled Series with same index (prevents ndarray/scalar issues)."""
+    if col in df.columns:
+        return pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    return pd.Series(0.0, index=df.index, dtype="float64")
+
 def prep_4h_flags(df_4h_raw: pd.DataFrame) -> pd.DataFrame:
     if df_4h_raw is None or len(df_4h_raw) == 0:
         return pd.DataFrame(index=pd.DatetimeIndex([], tz="UTC"))
     df4 = compute_indicators(df_4h_raw.copy())
-    rng = (df4["high"] - df4["low"])
-    cond = (
-        (df4.get("vol_z60", 0) >= 0.8) &
-        (df4.get("tr_z60", 0) >= 0.5) &
-        (df4["high"] > df4["high"].shift(1)) &
-        (df4["close"] >= df4["low"] + 0.65 * rng)
-    )
-    out = pd.DataFrame({"et_ok": cond.astype(bool)}, index=df4.index)
+
+    # Safe access to features as Series (not scalars)
+    vz = _series_or_zero(df4, "vol_z60")
+    tz = _series_or_zero(df4, "tr_z60")
+    high = pd.to_numeric(df4["high"], errors="coerce")
+    low  = pd.to_numeric(df4["low"],  errors="coerce")
+    close= pd.to_numeric(df4["close"],errors="coerce")
+
+    rng = (high - low)
+    cond = (vz >= 0.8) & (tz >= 0.5) & (high > high.shift(1)) & (close >= low + 0.65 * rng)
+    out = pd.DataFrame({"et_ok": cond.fillna(False).astype(bool)}, index=df4.index)
     return out
 
 def fourh_ok_between(df_4h_flags: pd.DataFrame, t0: pd.Timestamp, t1: pd.Timestamp) -> bool:
