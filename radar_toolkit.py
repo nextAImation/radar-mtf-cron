@@ -426,22 +426,34 @@ def compute_heat(btc_df: Optional[pd.DataFrame], eth_df: Optional[pd.DataFrame])
 
 def _quiet_pullback_flag(df: pd.DataFrame) -> pd.Series:
     """
-    QP: mean volume of last 3 red candles ≤ 0.85×vol_ma20 AND
-        mean red body ≤ 40th percentile of bodies in last 60 bars.
+    QP: میانگین حجم 3 کندل قرمز ≤ 0.85×vol_ma20  و
+        میانگین بدنه‌ی قرمز ≤ صدک 40 بدنه‌ها در 60 بار اخیر.
+    نسخه‌ی سازگار با pandas/NumPy: به جای rolling().quantile() از rolling().apply() استفاده می‌کنیم.
     """
-    body_abs = (df["close"] - df["open"]).abs()
-    red = (df["close"] < df["open"]).astype(int)
+    body_abs = (pd.to_numeric(df["close"], errors="coerce") - pd.to_numeric(df["open"], errors="coerce")).abs()
+    red = (pd.to_numeric(df["close"], errors="coerce") < pd.to_numeric(df["open"], errors="coerce")).astype(int)
 
-    vol_red = (df["vol"] * red).rolling(3, min_periods=3).mean()
+    vol = pd.to_numeric(df["vol"], errors="coerce")
+    vol_ma20 = pd.to_numeric(df.get("vol_ma20", vol.rolling(20, min_periods=5).mean()), errors="coerce")
+
+    # میانگین حجم 3 کندل قرمز اخیر
+    vol_red = (vol * red).rolling(3, min_periods=3).mean()
     cnt_red = red.rolling(3, min_periods=3).sum().replace(0, np.nan)
     mean_vol_red3 = vol_red / cnt_red
 
-    bodies60 = body_abs.rolling(60, min_periods=20)
-    p40 = bodies60.quantile(0.40).ffill()
+    # صدک 40 بدنه‌ها در 60 بار اخیر — نسخه‌ی پایدار
+    def _p40(arr: np.ndarray) -> float:
+        # arr یک آرایه‌ی 1بعدی (raw=True) است؛ NaN ها را نادیده می‌گیریم
+        arr = np.asarray(arr, dtype=float)
+        if arr.size == 0 or np.all(~np.isfinite(arr)):
+            return np.nan
+        return float(np.nanpercentile(arr, 40))
+    p40 = body_abs.rolling(60, min_periods=20).apply(_p40, raw=True).ffill()
 
-    cond_vol = mean_vol_red3 <= (0.85 * df["vol_ma20"])
+    cond_vol = mean_vol_red3 <= (0.85 * vol_ma20)
     cond_body = body_abs.rolling(3, min_periods=3).mean() <= p40
     return (cond_vol & cond_body).fillna(False)
+
 
 
 def _expansion_trigger_flag(df: pd.DataFrame) -> pd.Series:
@@ -740,3 +752,4 @@ if __name__ == "__main__":
     res = score_and_tags(base.copy(), params={"heat": 1, "is_alt": True})
     print({"score": res["score"], "grade": res["grade"], "guards": res["guards"][:3]})
     print("SCORING_OK")
+
