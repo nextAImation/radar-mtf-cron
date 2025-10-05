@@ -318,11 +318,12 @@ def compute_indicators(df: pd.DataFrame, params: Optional[dict] = None) -> pd.Da
     threshold = atr_s * k_series
     out["near_ema"] = (min_dist <= threshold).astype(bool)
 
-    # Candle OK
+    # Candle OK  (فیکس: آستانه t به Series هم‌اندیس تبدیل شد)
     bar_range = (out["high"] - out["low"]).replace(0.0, np.nan)
     pos = (out["close"] - out["low"]) / (bar_range + 1e-9)
-    t = np.where(out["adx14"] >= 25, 0.70, 0.60)
-    out["candle_ok"] = ((out["close"] > out["open"]) & (pos >= t)).astype(bool)
+    t_series = pd.Series(0.60, index=out.index, dtype="float64")
+    t_series.loc[out["adx14"] >= 25] = 0.70
+    out["candle_ok"] = ((out["close"] > out["open"]) & (pos >= t_series)).astype(bool)
 
     # Dynamic resistance distance (ATR-normalized)
     out["dyn_res"] = dynamic_resistance(out, lookback=20, min_pullback=5)
