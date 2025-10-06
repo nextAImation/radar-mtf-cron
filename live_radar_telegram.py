@@ -8,7 +8,7 @@ RADAR — Live Scanner to Telegram (MTF: Weekly + Daily + 4H)
 """
 from __future__ import annotations
 
-import os
+import osشسبیشسیبثبقثصقبصثبص
 import time
 from datetime import datetime, timezone
 
@@ -330,3 +330,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
