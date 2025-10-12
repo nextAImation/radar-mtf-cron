@@ -1,45 +1,55 @@
-name: Radar MTF Cron
+name: Crypto Market Analysis
 
 on:
-  workflow_dispatch:      # اجرای دستی برای تست
   schedule:
-    - cron: "5 */4 * * *" # هر 4 ساعت در دقیقه 05 (UTC)
+    - cron: "5 * * * *"      # دقیقه 05 هر ساعت (UTC) ~ 35 دقیقه به وقت ایران
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: market-analysis
+  cancel-in-progress: true
 
 jobs:
-  run:
+  analyze:
     runs-on: ubuntu-latest
-    env:
-      SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,TRXUSDT,LINKUSDT,AVAXUSDT,MATICUSDT,DOTUSDT,ATOMUSDT,LTCUSDT,ARBUSDT"
-      LIMIT_1D: "900"
-      LIMIT_4H: "1800"
-      MIN_SCORE_D: "55"
-      REQUIRE_NO_GUARDS: "0"
-      MTF_ENABLED: "1"
-      REQ_SLEEP_SEC: "0.25"
-      TZ: "UTC"  # لاگ‌ها برحسب UTC
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pandas numpy requests yfinance
 
-      - name: Run scanner
+      # (اختیاری) اگر می‌خواهی state اولیه باشد:
+      # - run: echo "{}" > market_state.json
+
+      - name: Run Market Analysis
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python live_radar_telegram.py
+          set -e
+          UTC_HOUR=$(date -u +%H)
+          if [ $((10#$UTC_HOUR % 4)) -eq 0 ]; then
+            echo "📊 Running 4h analysis..."
+            python crypto_market_analyzer.py --manual
+          else
+            echo "🕐 Running hourly analysis..."
+            python crypto_market_analyzer.py --manual
+          fi
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-logs
+          path: |
+            market_analyzer.log
+            market_state.json
